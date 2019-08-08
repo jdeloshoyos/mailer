@@ -4,5 +4,6 @@
     "password":"clave",
     "from_email":"Nombre del remitente <remitente@dominio.com",
     "separador_csv": ";",
-    "separador_subcampos": ","
+    "separador_subcampos": ",",
+    "timeout": 15
 }

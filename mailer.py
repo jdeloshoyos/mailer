@@ -14,6 +14,7 @@
 # v1.05 (6 junio 2019): Parámetros son leídos desde archivo .JSON
 # v1.06 (18 julio 2019): Incluimos Content-ID para los adjuntos, necesario para referenciar imágenes
 # v1.07 (2 agosto 2019): Separadores del CSV (de columnas, y de subcampos en las columnas de destinatarios y adjuntos) se leen desde JSON; upgrade a Python 3
+# v1.08 (8 agosto 2019): Parámetro "timeout" en config.json
 
 # MIT License
 # 
@@ -94,7 +95,8 @@ if not os.path.isfile(opts.texto):
 #    "password":"password",
 #    "from_email":"Dirección de correo <correo@dominio.com>",
 #    "separador_csv": ";",
-#    "separador_subcampos": ","
+#    "separador_subcampos": ",",
+#    "timeout": timeout_en_segundos
 #}
 try:
     with open(opts.config, 'r', encoding='utf-8') as json_file:
@@ -205,7 +207,7 @@ for i in elems_lista:
         composed = outer.as_string()
         
         # Listo. Composed contiene el mensaje armado completo, como un string, listo para ser enviado.
-        server = smtplib.SMTP(config['servidor_smtp'])
+        server = smtplib.SMTP(config['servidor_smtp'], timeout=config['timeout'])
         server.starttls()
         server.login(config['username'], config['password'])
         
