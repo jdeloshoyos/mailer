@@ -1,0 +1,8 @@
+{
+    "servidor_smtp":"mi.servidorsmtp.com:puerto",
+    "username":"usuario",
+    "password":"clave",
+    "from_email":"Nombre del remitente <remitente@dominio.com",
+    "separador_csv": ";",
+    "separador_subcampos": ","
+}
