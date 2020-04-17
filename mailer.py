@@ -15,6 +15,7 @@
 # v1.06 (18 julio 2019): Incluimos Content-ID para los adjuntos, necesario para referenciar imágenes
 # v1.07 (2 agosto 2019): Separadores del CSV (de columnas, y de subcampos en las columnas de destinatarios y adjuntos) se leen desde JSON; upgrade a Python 3
 # v1.08 (8 agosto 2019): Parámetro "timeout" en config.json
+# v1.09 (23 marzo 2020): Muestra resultados finales al terminar proceso
 
 # MIT License
 # 
@@ -135,6 +136,8 @@ f.close()
 # Iniciamos el proceso!
 elem_actual=0
 total_elems=len(elems_lista)
+envios_ok=0
+envios_error=0
 
 for i in elems_lista:
     elem_actual+=1
@@ -215,9 +218,14 @@ for i in elems_lista:
         server.quit()
         
         print('[OK]')    # Sólo se mostrará si el envío fue exitoso
+        envios_ok=envios_ok+1
+
     except:
         print('[ERROR]', end=' ')
         print(sys.exc_info()[1])
+        envios_error=envios_error+1
+
     finally:
         time.sleep(opts.delay)
-        
+
+print("\nProceso completo.", envios_ok, "correos enviados OK,", envios_error, "correos con error.")
