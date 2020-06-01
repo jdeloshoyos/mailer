@@ -16,6 +16,7 @@
 # v1.07 (2 agosto 2019): Separadores del CSV (de columnas, y de subcampos en las columnas de destinatarios y adjuntos) se leen desde JSON; upgrade a Python 3
 # v1.08 (8 agosto 2019): Parámetro "timeout" en config.json
 # v1.09 (23 marzo 2020): Muestra resultados finales al terminar proceso
+# v1.10 (21 abril 2020): Permite especificar la disposición (inline/attachment) de cada adjunto
 
 # MIT License
 # 
@@ -139,6 +140,9 @@ total_elems=len(elems_lista)
 envios_ok=0
 envios_error=0
 
+tiempo_inicio=time.time()
+print("Proceso iniciado el", time.strftime("%d/%m/%Y, a las %H:%M:%S", time.localtime(tiempo_inicio)))
+
 for i in elems_lista:
     elem_actual+=1
     elem_asunto=asunto
@@ -170,41 +174,49 @@ for i in elems_lista:
         # El siguiente código analiza la lista de adjuntos, la codifica según corresponda tratando de asignarle el 
         # MIME Type correcto, y lo agrega al mensaje.
         for filename in i[1].split(config['separador_subcampos']):
-            path = filename
-            if not os.path.isfile(path):
+            # Un nombre de archivo con "i|" antepuesto lo trataremos como disposición inline, para que sea
+            # incluido en el cuerpo del mensaje (útil para incrustar imágenes)
+            if len(filename) > 2 and filename[:2] == "i|":
+                filename = filename[2:]
+                disposicion = 'inline'
+            else:
+                disposicion = 'attachment'
+
+            if not os.path.isfile(filename):
                 continue
             # Guess the content type based on the file's extension.  Encoding
             # will be ignored, although we should check for simple things like
             # gzip'd or compressed files.
-            ctype, encoding = mimetypes.guess_type(path)
+            ctype, encoding = mimetypes.guess_type(filename)
             if ctype is None or encoding is not None:
                 # No guess could be made, or the file is encoded (compressed), so
                 # use a generic bag-of-bits type.
                 ctype = 'application/octet-stream'
             maintype, subtype = ctype.split('/', 1)
             if maintype == 'text':
-                fp = open(path)
+                fp = open(filename)
                 # Note: we should handle calculating the charset
                 msg = MIMEText(fp.read(), _subtype=subtype)
                 fp.close()
             elif maintype == 'image':
-                fp = open(path, 'rb')
+                fp = open(filename, 'rb')
                 msg = MIMEImage(fp.read(), _subtype=subtype)
                 fp.close()
             elif maintype == 'audio':
-                fp = open(path, 'rb')
+                fp = open(filename, 'rb')
                 msg = MIMEAudio(fp.read(), _subtype=subtype)
                 fp.close()
             else:
-                fp = open(path, 'rb')
+                fp = open(filename, 'rb')
                 msg = MIMEBase(maintype, subtype)
                 msg.set_payload(fp.read())
                 fp.close()
                 # Encode the payload using Base64
                 encoders.encode_base64(msg)
             # Set the filename parameter
-            msg.add_header('Content-Disposition', 'attachment', filename=filename)
-            msg.add_header('Content-ID', '<'+filename+'>')  # Necesario para referenciar imágenes desde el cuerpo del correo
+            msg.add_header('Content-Disposition', disposicion, filename=filename)
+            if disposicion == 'inline':
+                msg.add_header('Content-ID', '<'+filename+'>')  # Necesario para referenciar imágenes desde el cuerpo del correo
             outer.attach(msg)
         # Now send or store the message
         composed = outer.as_string()
@@ -229,3 +241,6 @@ for i in elems_lista:
         time.sleep(opts.delay)
 
 print("\nProceso completo.", envios_ok, "correos enviados OK,", envios_error, "correos con error.")
+
+tiempo_total=time.time()-tiempo_inicio
+print("Duración total:", time.strftime("%H:%M:%S", time.gmtime(tiempo_total)))

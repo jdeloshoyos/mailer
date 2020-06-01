@@ -46,6 +46,7 @@ import time
 import smtplib
 import mimetypes
 import json
+import re
 from optparse import OptionParser
 from email import encoders
 from email.message import Message
@@ -54,7 +55,7 @@ from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import sendgrid
+from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import *
 
 parser = OptionParser(usage="""\
@@ -100,7 +101,8 @@ if not os.path.isfile(opts.texto):
 #    "from_email":"Dirección de correo <correo@dominio.com>",
 #    "separador_csv": ";",
 #    "separador_subcampos": ",",
-#    "timeout": timeout_en_segundos
+#    "timeout": timeout_en_segundos,
+#    "engine": "SMTP" o "SENDGRID"
 #}
 try:
     with open(opts.config, 'r', encoding='utf-8') as json_file:
@@ -137,98 +139,197 @@ for linea in f:
 f.close()
 
 # Iniciamos el proceso!
-elem_actual=0
 total_elems=len(elems_lista)
-envios_ok=0
-envios_error=0
+elem_actual=0
 
-for i in elems_lista:
-    elem_actual+=1
-    elem_asunto=asunto
-    elem_cuerpo=cuerpo
-    for k, v in placeholders.items():
-        # Hacemos las sustituciones de todos los placeholders
-        elem_asunto=elem_asunto.replace(k, i[v])
-        elem_cuerpo=elem_cuerpo.replace(k, i[v])
-    print('['+str(elem_actual)+'/'+str(total_elems)+'] Enviando: '+i[0], end=' ')
-    
-    try:
-        # Create the enclosing (outer) message
-        outer = MIMEMultipart()
-        outer['Subject'] = elem_asunto
-        outer['To'] = i[0]
-        rcpt=i[0].split(config['separador_subcampos'])
-        if i[2]!='':
-            outer['Cc'] = i[2]
-            rcpt=rcpt+i[2].split(config['separador_subcampos'])
-        if i[3]!='':
-            outer['Bcc'] = i[3]
-            rcpt=rcpt+i[3].split(config['separador_subcampos'])
-        outer['From'] = config['from_email']
-        #outer.preamble = 'You will not see this in a MIME-aware mail reader.\n'
-        outer.attach(MIMEText(elem_cuerpo, 'html', 'UTF-8'))	# Sustituir plain por html y listo
-        # Adjuntar una versión HTML del cuerpo es trivial:
-        # http://stackoverflow.com/questions/882712/sending-html-email-in-python
-        
-        # El siguiente código analiza la lista de adjuntos, la codifica según corresponda tratando de asignarle el 
-        # MIME Type correcto, y lo agrega al mensaje.
-        for filename in i[1].split(config['separador_subcampos']):
-            path = filename
-            if not os.path.isfile(path):
-                continue
-            # Guess the content type based on the file's extension.  Encoding
-            # will be ignored, although we should check for simple things like
-            # gzip'd or compressed files.
-            ctype, encoding = mimetypes.guess_type(path)
-            if ctype is None or encoding is not None:
-                # No guess could be made, or the file is encoded (compressed), so
-                # use a generic bag-of-bits type.
-                ctype = 'application/octet-stream'
-            maintype, subtype = ctype.split('/', 1)
-            if maintype == 'text':
-                fp = open(path)
-                # Note: we should handle calculating the charset
-                msg = MIMEText(fp.read(), _subtype=subtype)
-                fp.close()
-            elif maintype == 'image':
-                fp = open(path, 'rb')
-                msg = MIMEImage(fp.read(), _subtype=subtype)
-                fp.close()
-            elif maintype == 'audio':
-                fp = open(path, 'rb')
-                msg = MIMEAudio(fp.read(), _subtype=subtype)
-                fp.close()
-            else:
-                fp = open(path, 'rb')
-                msg = MIMEBase(maintype, subtype)
-                msg.set_payload(fp.read())
-                fp.close()
-                # Encode the payload using Base64
-                encoders.encode_base64(msg)
-            # Set the filename parameter
-            msg.add_header('Content-Disposition', 'attachment', filename=filename)
-            msg.add_header('Content-ID', '<'+filename+'>')  # Necesario para referenciar imágenes desde el cuerpo del correo
-            outer.attach(msg)
-        # Now send or store the message
-        composed = outer.as_string()
-        
-        # Listo. Composed contiene el mensaje armado completo, como un string, listo para ser enviado.
-        server = smtplib.SMTP(config['servidor_smtp'], timeout=config['timeout'])
-        server.starttls()
-        server.login(config['username'], config['password'])
-        
-        server.sendmail(config['from_email'], rcpt, composed)  # Esto considera múltiples recipientes
-        server.quit()
-        
-        print('[OK]')    # Sólo se mostrará si el envío fue exitoso
-        envios_ok=envios_ok+1
+if config['engine'].upper() == "SENDGRID":
+    # Envío usando la API de Sendgrid
 
-    except:
-        print('[ERROR]', end=' ')
-        print(sys.exc_info()[1])
-        envios_error=envios_error+1
+    sendgrid_client = SendGridAPIClient(config['password'])
 
-    finally:
-        time.sleep(opts.delay)
+    # Sendgrid tiene varias restricciones. Permite hasta 1000 "personalizaciones" por envío,
+    # hasta 1000 direcciones de correo individuales por envío,
+    # y el payload del JSON para un envío no puede superar 30 MB.
+    # Entonces, por seguridad, restringimos los bloques de envío a una cantidad de "líneas" por vez.
+    # Sendgrid incorpora la capacidad de hacer sustituciones directamente con su API.
+    bloque_envios = 200
+    while elem_actual < total_elems:
+        print("Enviando correos", elem_actual + 1, "al", min(elem_actual + bloque_envios, total_elems), "de", total_elems, "...") 
+        mensaje = Mail()
+        pers_id = 0
+        dict_adjuntos = {}
 
-print("\nProceso completo.", envios_ok, "correos enviados OK,", envios_error, "correos con error.")
+        # Antes de iniciar, vamos a determinar si hay adjuntos que estén presentes en TODAS las personalizaciones,
+        # para en ese caso agregarlas una única vez al final. Esto lo hacemos contando las ocurrencias de cada
+        # nombre de adjunto en la lista; si el conteo de un adjunto = total_elems, está en todos los envíos.
+        for i in range(elem_actual, min(elem_actual + bloque_envios, total_elems)):
+            adjuntos_linea = elems_lista[i][1].split(config['separador_subcampos'])
+
+            # Eliminamos posibles duplicados en la lista de adjuntos para esta línea
+            adjuntos_linea = list(dict.fromkeys(adjuntos_linea))
+
+            # Incrementamos el valor del diccionario para cada nombre de adjunto
+            for j in adjuntos_linea:
+                dict_adjuntos[j] = dict_adjuntos.get(j, 0) + 1
+
+        # Ahora sí, procesamos todos los elementos del bloque
+        for i in range(elem_actual, min(elem_actual + bloque_envios, total_elems)):
+            # Envío del bloque
+
+            # Destinatarios
+            to = []
+            for j in elems_lista[i][0].split(config['separador_subcampos']):
+                to.append(To(j, p=pers_id))
+            mensaje.to = to
+
+            # Cc
+            if elems_lista[i][2] != '':
+                cc = []
+                for j in elems_lista[i][2].split(config['separador_subcampos']):
+                    cc.append(Cc(j, p=pers_id))
+                mensaje.cc = cc
+
+            # Bcc
+            if elems_lista[i][3] != '':
+                bcc = []
+                for j in elems_lista[i][3].split(config['separador_subcampos']):
+                    bcc.append(Bcc(j, p=pers_id))
+                mensaje.bcc = bcc
+
+            # Sustituciones
+            if len(placeholders) > 0:
+                sustituciones = []
+                for k, v in placeholders.items():
+                    sustituciones.append(Substitution(k, elems_lista[i][v], p=pers_id))
+                mensaje.substitution = sustituciones
+
+            # Adjuntos
+            adjuntos_linea = elems_lista[i][1].split(config['separador_subcampos'])
+
+            # Eliminamos posibles duplicados en la lista de adjuntos para esta línea
+            adjuntos_linea = list(dict.fromkeys(adjuntos_linea))
+
+            for j in adjuntos_linea:
+                if dict_adjuntos.get(j, 0) < bloque_envios:
+                    # No es un adjunto común a TODOS los elementos del bloque, así que lo procesamos aquí
+                    # OJO: Parece que SendGrid NO permite enviar adjuntos diferenciados en cada personalización...
+            pers_id += 1
+
+        # Elementos comunes a todo el mensaje
+        m=re.search(r'^([^<]+)<([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>$', config['from_email'])
+        mensaje.from_email = From(m.group(2), m.group(1).strip())
+        mensaje.subject = Subject(asunto)
+        mensaje.content = Content(MimeType.html, cuerpo)
+        # Adjuntos comunes a todas las personalizaciones del bloque
+        for k for k, v in dict_adjuntos.items() if float(v) = bloque_envios:
+            # Procesamos cada adjunto común aquí
+
+        # Bloque compilado. Hacemos el envío!
+        try:
+            print("[OK] Bloque enviado OK. Respuesta del servidor:")
+            response = sendgrid_client.send(mensaje)
+            print(response.status_code)
+            print(response.body)
+            print(response.headers)
+        except Exception as e:
+            print("[ERROR] Envío de bloque falló. Respuesta del servidor:")
+            print(e)
+
+        elem_actual = elem_actual + bloque_envios
+
+elif config['engine'].upper() == "SMTP":
+    # Envío por medio de SMTP regular
+
+    envios_ok=0
+    envios_error=0
+
+    for i in elems_lista:
+        elem_actual+=1
+        elem_asunto=asunto
+        elem_cuerpo=cuerpo
+        for k, v in placeholders.items():
+            # Hacemos las sustituciones de todos los placeholders
+            elem_asunto=elem_asunto.replace(k, i[v])
+            elem_cuerpo=elem_cuerpo.replace(k, i[v])
+        print('['+str(elem_actual)+'/'+str(total_elems)+'] Enviando: '+i[0], end=' ')
+        
+        try:
+            # Create the enclosing (outer) message
+            outer = MIMEMultipart()
+            outer['Subject'] = elem_asunto
+            outer['To'] = i[0]
+            rcpt=i[0].split(config['separador_subcampos'])
+            if i[2]!='':
+                outer['Cc'] = i[2]
+                rcpt=rcpt+i[2].split(config['separador_subcampos'])
+            if i[3]!='':
+                outer['Bcc'] = i[3]
+                rcpt=rcpt+i[3].split(config['separador_subcampos'])
+            outer['From'] = config['from_email']
+            #outer.preamble = 'You will not see this in a MIME-aware mail reader.\n'
+            outer.attach(MIMEText(elem_cuerpo, 'html', 'UTF-8'))	# Sustituir plain por html y listo
+            # Adjuntar una versión HTML del cuerpo es trivial:
+            # http://stackoverflow.com/questions/882712/sending-html-email-in-python
+            
+            # El siguiente código analiza la lista de adjuntos, la codifica según corresponda tratando de asignarle el 
+            # MIME Type correcto, y lo agrega al mensaje.
+            for filename in i[1].split(config['separador_subcampos']):
+                path = filename
+                if not os.path.isfile(path):
+                    continue
+                # Guess the content type based on the file's extension.  Encoding
+                # will be ignored, although we should check for simple things like
+                # gzip'd or compressed files.
+                ctype, encoding = mimetypes.guess_type(path)
+                if ctype is None or encoding is not None:
+                    # No guess could be made, or the file is encoded (compressed), so
+                    # use a generic bag-of-bits type.
+                    ctype = 'application/octet-stream'
+                maintype, subtype = ctype.split('/', 1)
+                if maintype == 'text':
+                    fp = open(path)
+                    # Note: we should handle calculating the charset
+                    msg = MIMEText(fp.read(), _subtype=subtype)
+                    fp.close()
+                elif maintype == 'image':
+                    fp = open(path, 'rb')
+                    msg = MIMEImage(fp.read(), _subtype=subtype)
+                    fp.close()
+                elif maintype == 'audio':
+                    fp = open(path, 'rb')
+                    msg = MIMEAudio(fp.read(), _subtype=subtype)
+                    fp.close()
+                else:
+                    fp = open(path, 'rb')
+                    msg = MIMEBase(maintype, subtype)
+                    msg.set_payload(fp.read())
+                    fp.close()
+                    # Encode the payload using Base64
+                    encoders.encode_base64(msg)
+                # Set the filename parameter
+                msg.add_header('Content-Disposition', 'attachment', filename=filename)  # attachment para adjuntos regulares, inline para imágenes en el cuerpo del correo
+                msg.add_header('Content-ID', '<'+filename+'>')  # Necesario para referenciar imágenes desde el cuerpo del correo
+                outer.attach(msg)
+            # Now send or store the message
+            composed = outer.as_string()
+            
+            # Listo. Composed contiene el mensaje armado completo, como un string, listo para ser enviado.
+            server = smtplib.SMTP(config['servidor_smtp'], timeout=config['timeout'])
+            server.starttls()
+            server.login(config['username'], config['password'])
+            
+            server.sendmail(config['from_email'], rcpt, composed)  # Esto considera múltiples recipientes
+            server.quit()
+            
+            print('[OK]')    # Sólo se mostrará si el envío fue exitoso
+            envios_ok=envios_ok+1
+
+        except:
+            print('[ERROR]', end=' ')
+            print(sys.exc_info()[1])
+            envios_error=envios_error+1
+
+        finally:
+            time.sleep(opts.delay)
+
+    print("\nProceso completo.", envios_ok, "correos enviados OK,", envios_error, "correos con error.")
