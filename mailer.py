@@ -17,6 +17,7 @@
 # v1.08 (8 agosto 2019): Parámetro "timeout" en config.json
 # v1.09 (23 marzo 2020): Muestra resultados finales al terminar proceso
 # v1.10 (21 abril 2020): Permite especificar la disposición (inline/attachment) de cada adjunto
+# v1.11 (22 julio 2020): El programa termina con status code 1 para errores fatales, 2 si alguno de los envíos falló
 
 # MIT License
 # 
@@ -244,3 +245,7 @@ print("\nProceso completo.", envios_ok, "correos enviados OK,", envios_error, "c
 
 tiempo_total=time.time()-tiempo_inicio
 print("Duración total:", time.strftime("%H:%M:%S", time.gmtime(tiempo_total)))
+
+# Si no hubo errores en ningún envío, terminamos con status code 0. Pero si al menos un envío falló, salimos con status code 2
+if envios_error > 0:
+    sys.exit(2)
