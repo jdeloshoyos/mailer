@@ -18,6 +18,7 @@
 # v1.09 (23 marzo 2020): Muestra resultados finales al terminar proceso
 # v1.10 (21 abril 2020): Permite especificar la disposición (inline/attachment) de cada adjunto
 # v1.11 (22 julio 2020): El programa termina con status code 1 para errores fatales, 2 si alguno de los envíos falló
+# v1.12 (24 julio 2020): Corrección de bug en el nombre de archivo del adjunto si se usa una ruta más profunda; independiente de la ruta, muestra sólo el archivo terminal
 
 # MIT License
 # 
@@ -55,6 +56,10 @@ from email.mime.base import MIMEBase
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import ntpath
+
+version = "1.12"
+print("Mailer v{}".format(version))
 
 parser = OptionParser(usage="""\
 Envia un correo tipo a una lista de direcciones, opcionalmente con archivos adjuntos.
@@ -214,7 +219,8 @@ for i in elems_lista:
                 fp.close()
                 # Encode the payload using Base64
                 encoders.encode_base64(msg)
-            # Set the filename parameter
+            # Fijamos los headers para el nombre de archivo. Si es una ruta, dejamos sólo el nombre terminal de archivo de la misma.
+            filename = ntpath.basename(filename)
             msg.add_header('Content-Disposition', disposicion, filename=filename)
             if disposicion == 'inline':
                 msg.add_header('Content-ID', '<'+filename+'>')  # Necesario para referenciar imágenes desde el cuerpo del correo
