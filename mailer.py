@@ -58,7 +58,27 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import ntpath
 
-version = "1.12"
+#################################
+# FUNCIONES Y CLASES AUXILIARES #
+#################################
+
+class c_color:
+    """
+    Códigos ANSI para la impresión de texto en color en la consola
+    """
+
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+
+version = "1.12.1"
 print("Mailer v{}".format(version))
 
 parser = OptionParser(usage="""\
@@ -147,7 +167,7 @@ envios_ok=0
 envios_error=0
 
 tiempo_inicio=time.time()
-print("Proceso iniciado el", time.strftime("%d/%m/%Y, a las %H:%M:%S", time.localtime(tiempo_inicio)))
+print(f"{c_color.OKCYAN}Proceso iniciado el", time.strftime(f"%d/%m/%Y, a las %H:%M:%S{c_color.ENDC}", time.localtime(tiempo_inicio)))
 
 for i in elems_lista:
     elem_actual+=1
@@ -157,7 +177,7 @@ for i in elems_lista:
         # Hacemos las sustituciones de todos los placeholders
         elem_asunto=elem_asunto.replace(k, i[v])
         elem_cuerpo=elem_cuerpo.replace(k, i[v])
-    print('['+str(elem_actual)+'/'+str(total_elems)+'] Enviando: '+i[0], end=' ')
+    print(f'[{c_color.OKBLUE}'+str(elem_actual)+'/'+str(total_elems)+f'{c_color.ENDC}] Enviando: '+i[0], end=' ')
     
     try:
         # Create the enclosing (outer) message
@@ -236,11 +256,11 @@ for i in elems_lista:
         server.sendmail(config['from_email'], rcpt, composed)  # Esto considera múltiples recipientes
         server.quit()
         
-        print('[OK]')    # Sólo se mostrará si el envío fue exitoso
+        print(f'[{c_color.OKGREEN}OK{c_color.ENDC}]')    # Sólo se mostrará si el envío fue exitoso
         envios_ok=envios_ok+1
 
     except:
-        print('[ERROR]', end=' ')
+        print(f'[{c_color.FAIL}ERROR{c_color.ENDC}]', end=' ')
         print(sys.exc_info()[1])
         envios_error=envios_error+1
 
